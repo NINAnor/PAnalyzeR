@@ -3,6 +3,14 @@
 #' @param request Internal parameter for `{shiny}`.
 #'     DO NOT REMOVE.
 #' @import shiny
+#' @import giscoR
+#' @import sf
+#' @import leaflet
+#' @import leafem
+#' @import mapedit
+#' @import shinyFiles
+#' @import dplyr
+#' @import wdpar
 #' @noRd
 app_ui <- function(request) {
   tagList(
@@ -10,7 +18,14 @@ app_ui <- function(request) {
     golem_add_external_resources(),
     # Your application UI logic
     fluidPage(
-      h1("PAnalyzeR")
+      h1("PAnalyzeR"),
+      selectInput("country", "Choose one or several countries", c("NO","FR","SVK"), selected = NULL, multiple = TRUE,
+                  selectize = TRUE, width = NULL),
+      uiOutput("conf_cntry"),
+      selectModUI("NUTS3_map"),
+      actionButton("confirm2","confirm"),
+      shinyFilesButton('files', label='File select', title='Please select a file', multiple=FALSE)
+
     )
   )
 }
@@ -24,6 +39,7 @@ app_ui <- function(request) {
 #' @importFrom golem add_resource_path activate_js favicon bundle_resources
 #' @noRd
 golem_add_external_resources <- function() {
+
   add_resource_path(
     "www",
     app_sys("app/www")
