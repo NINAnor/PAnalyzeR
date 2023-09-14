@@ -10,7 +10,9 @@
 #' @import mapedit
 #' @import shinyFiles
 #' @import dplyr
-#' @import wdpar
+#' @import DT
+#' @import shinycssloaders
+#' @import rgee
 #' @noRd
 app_ui <- function(request) {
   tagList(
@@ -24,7 +26,9 @@ app_ui <- function(request) {
       uiOutput("conf_cntry"),
       selectModUI("NUTS3_map"),
       actionButton("confirm2","confirm"),
-      shinyFilesButton('files', label='File select', title='Please select a file', multiple=FALSE)
+      uiOutput("com_tab"),
+      uiOutput("fin_tab")
+
 
     )
   )

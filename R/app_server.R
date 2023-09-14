@@ -6,7 +6,7 @@
 #' @noRd
 app_server <- function(input, output, session) {
   # Your application server logic
-
+  ee_Initialize()
   ## create confirm country button
   output$conf_cntry<-renderUI({
     validate(
@@ -17,8 +17,7 @@ app_server <- function(input, output, session) {
   })
 
   ## load NUTS 3 based on input country
-  map_nuts3<-eventReactive(input$confirm1,{
-
+  nuts3<-eventReactive(input$confirm1,{
     nuts3<-giscoR::gisco_get_nuts(
       year = "2016",
       epsg = "4326",
@@ -32,15 +31,19 @@ app_server <- function(input, output, session) {
       nuts_id = NULL,
       nuts_level = "3"
     )
+
+  })
+
+  map_nuts3<-eventReactive(input$confirm1,{
+    req(nuts3)
+    nuts3<-nuts3()
     # print(nrow(nuts3))
     map_nuts3<- leaflet() %>%
       addProviderTiles(provider= "CartoDB.Positron")%>%
       addFeatures(st_sf(nuts3), layerId = ~NUTS_ID)
-
-
   })
 
-  # nuts3_sel<-mapedit::selectMap(map_nuts3)
+  #nuts3_sel<-mapedit::selectMap(map_nuts3)
   nuts3_sel <- callModule(module=selectMod,
                         leafmap=map_nuts3(),
                         id="NUTS3_map")
@@ -49,9 +52,11 @@ app_server <- function(input, output, session) {
   # nuts3_sel<-st_sf(nuts3[as.numeric(map_nuts3_sel[which(map_nuts3_sel$selected==TRUE),"id"])])
 
   ## communities
-  observeEvent(input$confirm2,{
+  comm<-eventReactive(input$confirm2,{
     nuts3_sel<-nuts3_sel()
+
     print(nuts3_sel)
+
     comm<-giscoR::gisco_get_communes(year = "2016",
                                       epsg = "4326",
                                      cache = TRUE,
@@ -61,10 +66,94 @@ app_server <- function(input, output, session) {
                                      spatialtype = "RG",
                                      country = input$country
     )%>%filter(NUTS_CODE %in% nuts3_sel$id)
-    print(nrow(comm))
+    # print(nrow(comm))
+
   })
 
-  wdpr_path<-shinyFileChoose(input, 'files', root=c(root='.'), filetypes=c('', 'txt'))
+  observeEvent(input$confirm2,{
+    comm<-comm()
+    print(nrow(comm))
+    nuts3<-nuts3()
+    print(nrow(nuts3))
+    nuts3<-nuts3%>%st_drop_geometry()%>%select(NUTS_ID,URBN_TYPE,MOUNT_TYPE,COAST_TYPE,NUTS_NAME)
+    output$com_tab<-renderUI(
+      tagList(
+      withSpinner(DTOutput("DT_com")),
+      actionButton('down_pa', label='download PA info')
+      )
+
+    )
+
+    com_tab<-left_join(comm, nuts3, by = join_by("NUTS_CODE"=="NUTS_ID"))%>%st_drop_geometry()%>%select(COMM_ID,CNTR_CODE,COMM_NAME,NUTS_CODE,NUTS_NAME,URBN_TYPE,MOUNT_TYPE,COAST_TYPE)
+    output$DT_com<-renderDT(com_tab)
+  })
+
+  observeEvent(input$down_pa,{
+    comm<-comm()
+    print("----- insert last part-------")
+    gee_comm<-comm%>%select(FID)
+    gee_comm<-sf_as_ee(gee_comm)
+
+    ## combined mean max min reducer
+    reducers <- ee$Reducer$mean()$combine(
+      reducer2= ee$Reducer$max(),
+      sharedInputs= TRUE
+    )$combine(
+      reducer2= ee$Reducer$min(),
+      sharedInputs= TRUE
+    )
+
+    #calc mean and stdv height
+    DEM <- ee$Image("NASA/NASADEM_HGT/001")$select("elevation")
+    # DEM<-DEM$resample("bilinear")$reproject(crs= "EPSG:4326",scale=100)
+    # DEM<-DEM$clip(gee_comm)
+    zone_stats_dem <- DEM$reduceRegions(collection=gee_comm, reducer=reducers)
+
+    zone_stats_dem <- ee_as_sf(zone_stats_dem,via = "getInfo")
+    a<-left_join(comm%>%st_drop_geometry(),zone_stats_dem%>%st_drop_geometry(),by="FID")
+    names(a)[names(a) == c('max',"mean","min")] <- c('elev_max',"elev_mean","elev_min")
+    print("---DEM---")
+    ## slope
+    slope <- ee$Terrain$slope(DEM)
+    zone_stats_slope <- slope$reduceRegions(collection=gee_comm, reducer=reducers)
+    # zone_stats_slope <- ee_as_sf(zone_stats_slope,via = "getInfo")
+    a<-left_join(a,ee_as_sf(zone_stats_slope,via = "getInfo")%>%st_drop_geometry(),by="FID")
+    names(a)[names(a) == c('max',"mean","min")] <- c('slope_max',"slope_mean","slope_min")
+    print("---slope---")
+
+    ## biomass abg
+    biom_abg <- ee$Image("WCMC/biomass_carbon_density/v1_0/2010")$select("carbon_tonnes_per_ha")
+    # biom_abg = biom_abg$mean()
+    zone_stats_biom <- biom_abg$reduceRegions(collection=gee_comm, reducer=reducers)
+    a<-left_join(a,ee_as_sf(zone_stats_biom,via = "getInfo")%>%st_drop_geometry(),by="FID")
+    names(a)[names(a) == c('max',"mean","min")] <- c('abg_co_tha_max',"abg_co_tha_mean","abg_co_tha_min")
+    print("---biom---")
+
+
+    ## population
+    pop <- ee$ImageCollection("WorldPop/GP/100m/pop")$select("population")
+    pop = pop$mean()
+    zone_stats_pop <- pop$reduceRegions(collection=gee_comm, reducer=ee$Reducer$mean())
+    a<-left_join(a,ee_as_sf(zone_stats_pop,via = "getInfo")%>%st_drop_geometry(),by="FID")
+    names(a)[names(a) == c("mean")] <- c("pop_ha")
+    print("---pop---")
+
+
+    ## accessibility
+    acc = ee$Image('Oxford/MAP/accessibility_to_cities_2015_v1_0')$select('accessibility')
+    zone_stats_acc <- acc$reduceRegions(collection=gee_comm, reducer=ee$Reducer$mean())
+    a<-left_join(a,ee_as_sf(zone_stats_acc,via = "getInfo")%>%st_drop_geometry(),by="FID")
+    names(a)[names(a) == c("mean")] <- c("min_travTime_cent")
+    print("---acc---")
+
+    output$fin_tab<-renderUI(
+      withSpinner(DTOutput("DT_com_fin"))
+    )
+    output$DT_com_fin<-renderDT(a)
+
+  })
+
+
 
 
 }
