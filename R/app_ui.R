@@ -13,6 +13,9 @@
 #' @import DT
 #' @import shinycssloaders
 #' @import rgee
+#' @import factoextra
+#' @import missForest
+#' @import mapview
 #' @noRd
 app_ui <- function(request) {
   tagList(
@@ -27,7 +30,8 @@ app_ui <- function(request) {
       selectModUI("NUTS3_map"),
       actionButton("confirm2","confirm"),
       uiOutput("com_tab"),
-      uiOutput("fin_tab")
+      uiOutput("fin_tab"),
+      mapviewOutput("clus_map")
 
 
     )

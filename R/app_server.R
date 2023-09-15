@@ -88,7 +88,7 @@ app_server <- function(input, output, session) {
     output$DT_com<-renderDT(com_tab)
   })
 
-  observeEvent(input$down_pa,{
+  comm_all<-eventReactive(input$down_pa,{
     comm<-comm()
     print("----- insert last part-------")
     gee_comm<-comm%>%select(FID)
@@ -131,11 +131,11 @@ app_server <- function(input, output, session) {
 
 
     ## population
-    pop <- ee$ImageCollection("WorldPop/GP/100m/pop")$select("population")
-    pop = pop$mean()
-    zone_stats_pop <- pop$reduceRegions(collection=gee_comm, reducer=ee$Reducer$mean())
-    a<-left_join(a,ee_as_sf(zone_stats_pop,via = "getInfo")%>%st_drop_geometry(),by="FID")
-    names(a)[names(a) == c("mean")] <- c("pop_ha")
+    # pop <- ee$ImageCollection("WorldPop/GP/100m/pop")$select("population")
+    # pop = pop$mean()
+    # zone_stats_pop <- pop$reduceRegions(collection=gee_comm, reducer=ee$Reducer$mean())
+    # a<-left_join(a,ee_as_sf(zone_stats_pop,via = "getInfo")%>%st_drop_geometry(),by="FID")
+    # names(a)[names(a) == c("mean")] <- c("pop_ha")
     print("---pop---")
 
 
@@ -146,13 +146,66 @@ app_server <- function(input, output, session) {
     names(a)[names(a) == c("mean")] <- c("min_travTime_cent")
     print("---acc---")
 
+    ### LULC group field area % per community and lulc
+    # lulc <- ee$Image("COPERNICUS/CORINE/V20/100m/2018")
+
+    ## ev just for broad classes:artificial, agricultural, seminatural forest, natural forest, wetland, water
+    # zone_stats_lulc <- lulc$reduceRegions(collection=gee_comm, reducer=ee$Reducer$frequencyHistogram())
+    # a<-ee_as_sf(zone_stats_lulc,via = "getInfo")
+
+    ## overlay PA
+    #select polygons that are in input cntr
+    PA <- ee$FeatureCollection('WCMC/WDPA/current/polygons')$filter('PARENT_ISO == "NOR"')
+    PA_rast <- PA$reduceToImage(
+      properties = list('GIS_AREA'),
+      reducer = ee$Reducer$first()
+    )
+    PA_rast_repr<-PA_rast$reproject('EPSG:4326', NULL, 250)
+
+    PA_recl<-ee$Image(0)$where(PA_rast_repr$gt(0),1)$select("constant")
+
+    # zone_stats_pa <- PA_recl$reduceRegions(collection=gee_comm, reducer=ee$Reducer$frequencyHistogram(),scale=250)
+
+  })
+
+  observeEvent(input$down_pa,{
+    comm_all<-comm_all()
+
     output$fin_tab<-renderUI(
       withSpinner(DTOutput("DT_com_fin"))
     )
     output$DT_com_fin<-renderDT(a)
+  })
+
+  #cluster analysis of communities
+  comm_clu<-eventReactive(input$down_pa,{
+    req(comm_all)
+    print("------start clustering---------")
+    comm_all<-comm_all()
+    comm<-comm()
+    z <- comm_all%>%select(elev_mean,elev_max,elev_min,slope_mean,slope_max,abg_co_tha_mean,abg_co_tha_max,abg_co_tha_min,min_travTime_cent,pop_ha)
+    z <- missForest(z)$ximp
+    means <- apply(z,2,mean,na.rm=T)
+    sds <- apply(z,2,sd,na.rm=T)
+    nor <- scale(z,center=means,scale=sds)
+
+    # k means (predefined n clust)
+    # library(factoextra)
+    k2 <- kmeans(nor, centers = 3, nstart = 25)
+    comm$clust<-k2$cluster
+    #which community in the clusters are closest to the center?
+    datadistshortset<-dist(nor,method = "euclidean")
 
   })
 
+  ## show the clustered communities
+
+  observeEvent(input$down_pa,{
+    req(comm)
+    comm<-comm()
+    output$clus_map<-renderMapview(comm)
+
+  })
 
 
 
