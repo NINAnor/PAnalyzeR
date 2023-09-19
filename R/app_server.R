@@ -43,7 +43,7 @@ app_server <- function(input, output, session) {
       addFeatures(st_sf(nuts3), layerId = ~NUTS_ID)
   })
 
-  #nuts3_sel<-mapedit::selectMap(map_nuts3)
+   # nuts3_sel<-mapedit::selectMap(map_nuts3)
   nuts3_sel <- callModule(module=selectMod,
                         leafmap=map_nuts3(),
                         id="NUTS3_map")
@@ -75,7 +75,7 @@ app_server <- function(input, output, session) {
     print(nrow(comm))
     nuts3<-nuts3()
     print(nrow(nuts3))
-    nuts3<-nuts3%>%st_drop_geometry()%>%select(NUTS_ID,URBN_TYPE,MOUNT_TYPE,COAST_TYPE,NUTS_NAME)
+    nuts3_df<-nuts3%>%st_drop_geometry()%>%select(NUTS_ID,URBN_TYPE,MOUNT_TYPE,COAST_TYPE,NUTS_NAME)
     output$com_tab<-renderUI(
       tagList(
       withSpinner(DTOutput("DT_com")),
@@ -84,7 +84,7 @@ app_server <- function(input, output, session) {
 
     )
 
-    com_tab<-left_join(comm, nuts3, by = join_by("NUTS_CODE"=="NUTS_ID"))%>%st_drop_geometry()%>%select(COMM_ID,CNTR_CODE,COMM_NAME,NUTS_CODE,NUTS_NAME,URBN_TYPE,MOUNT_TYPE,COAST_TYPE)
+    com_tab<-left_join(comm, nuts3_df, by = join_by("NUTS_CODE"=="NUTS_ID"))%>%st_drop_geometry()%>%select(COMM_ID,CNTR_CODE,COMM_NAME,NUTS_CODE,NUTS_NAME,URBN_TYPE,MOUNT_TYPE,COAST_TYPE)
     output$DT_com<-renderDT(com_tab)
   })
 
@@ -102,48 +102,52 @@ app_server <- function(input, output, session) {
       reducer2= ee$Reducer$min(),
       sharedInputs= TRUE
     )
+    calc_scale<-1000
 
     #calc mean and stdv height
-    DEM <- ee$Image("NASA/NASADEM_HGT/001")$select("elevation")
-    # DEM<-DEM$resample("bilinear")$reproject(crs= "EPSG:4326",scale=100)
-    # DEM<-DEM$clip(gee_comm)
-    zone_stats_dem <- DEM$reduceRegions(collection=gee_comm, reducer=reducers)
+    DEM <- ee$ImageCollection("COPERNICUS/DEM/GLO30")$select("DEM")
+    DEM = DEM$mosaic()
+    zone_stats_dem <- DEM$reduceRegions(collection=gee_comm, reducer=reducers,scale = calc_scale)
 
     zone_stats_dem <- ee_as_sf(zone_stats_dem,via = "getInfo")
     a<-left_join(comm%>%st_drop_geometry(),zone_stats_dem%>%st_drop_geometry(),by="FID")
-    names(a)[names(a) == c('max',"mean","min")] <- c('elev_max',"elev_mean","elev_min")
+
+    names(a)[c((ncol(a)-2),(ncol(a)-1),ncol(a))] <- c("elev_max","elev_mean","elev_min")
     print("---DEM---")
     ## slope
-    slope <- ee$Terrain$slope(DEM)
-    zone_stats_slope <- slope$reduceRegions(collection=gee_comm, reducer=reducers)
-    # zone_stats_slope <- ee_as_sf(zone_stats_slope,via = "getInfo")
+    DEM <- ee$ImageCollection("COPERNICUS/DEM/GLO30")$select("DEM")
+    proj = DEM$first()$select(0)$projection()
+    slope<-ee$Terrain$slope(DEM$mosaic()
+                            $setDefaultProjection(proj))
+
+    zone_stats_slope <- slope$reduceRegions(collection=gee_comm, reducer=reducers,scale = calc_scale)
     a<-left_join(a,ee_as_sf(zone_stats_slope,via = "getInfo")%>%st_drop_geometry(),by="FID")
-    names(a)[names(a) == c('max',"mean","min")] <- c('slope_max',"slope_mean","slope_min")
+    names(a)[c((ncol(a)-2),(ncol(a)-1),ncol(a))]<- c('slope_max',"slope_mean","slope_min")
     print("---slope---")
 
-    ## biomass abg
+    ## biomass abg already 300m res
     biom_abg <- ee$Image("WCMC/biomass_carbon_density/v1_0/2010")$select("carbon_tonnes_per_ha")
     # biom_abg = biom_abg$mean()
-    zone_stats_biom <- biom_abg$reduceRegions(collection=gee_comm, reducer=reducers)
+    zone_stats_biom <- biom_abg$reduceRegions(collection=gee_comm, reducer=reducers,scale = calc_scale)
     a<-left_join(a,ee_as_sf(zone_stats_biom,via = "getInfo")%>%st_drop_geometry(),by="FID")
-    names(a)[names(a) == c('max',"mean","min")] <- c('abg_co_tha_max',"abg_co_tha_mean","abg_co_tha_min")
+    names(a)[c((ncol(a)-2),(ncol(a)-1),ncol(a))] <- c('abg_co_tha_max',"abg_co_tha_mean","abg_co_tha_min")
     print("---biom---")
 
 
     ## population
-    # pop <- ee$ImageCollection("WorldPop/GP/100m/pop")$select("population")
-    # pop = pop$mean()
-    # zone_stats_pop <- pop$reduceRegions(collection=gee_comm, reducer=ee$Reducer$mean())
-    # a<-left_join(a,ee_as_sf(zone_stats_pop,via = "getInfo")%>%st_drop_geometry(),by="FID")
-    # names(a)[names(a) == c("mean")] <- c("pop_ha")
+    pop <- ee$ImageCollection("WorldPop/GP/100m/pop")$select("population")
+    pop = pop$mosaic()
+    zone_stats_pop <- pop$reduceRegions(collection=gee_comm, reducer=ee$Reducer$mean(),scale = calc_scale)
+    a<-left_join(a,ee_as_sf(zone_stats_pop,via = "getInfo")%>%st_drop_geometry(),by="FID")
+    names(a)[ncol(a)] <- c("pop_ha")
     print("---pop---")
 
 
     ## accessibility
     acc = ee$Image('Oxford/MAP/accessibility_to_cities_2015_v1_0')$select('accessibility')
-    zone_stats_acc <- acc$reduceRegions(collection=gee_comm, reducer=ee$Reducer$mean())
+    zone_stats_acc <- acc$reduceRegions(collection=gee_comm, reducer=ee$Reducer$mean(),scale = calc_scale)
     a<-left_join(a,ee_as_sf(zone_stats_acc,via = "getInfo")%>%st_drop_geometry(),by="FID")
-    names(a)[names(a) == c("mean")] <- c("min_travTime_cent")
+    names(a)[ncol(a)] <- c("min_travTime_cent")
     print("---acc---")
 
     ### LULC group field area % per community and lulc
@@ -155,55 +159,57 @@ app_server <- function(input, output, session) {
 
     ## overlay PA
     #select polygons that are in input cntr
-    PA <- ee$FeatureCollection('WCMC/WDPA/current/polygons')$filter('PARENT_ISO == "NOR"')
-    PA_rast <- PA$reduceToImage(
-      properties = list('GIS_AREA'),
-      reducer = ee$Reducer$first()
-    )
-    PA_rast_repr<-PA_rast$reproject('EPSG:4326', NULL, 250)
-
-    PA_recl<-ee$Image(0)$where(PA_rast_repr$gt(0),1)$select("constant")
+    # PA <- ee$FeatureCollection('WCMC/WDPA/current/polygons')$filter('PARENT_ISO == "NOR"')
+    # PA_rast <- PA$reduceToImage(
+    #   properties = list('GIS_AREA'),
+    #   reducer = ee$Reducer$first()
+    # )
+    # PA_rast_repr<-PA_rast$reproject('EPSG:4326', NULL, 250)
+    #
+    # PA_recl<-ee$Image(0)$where(PA_rast_repr$gt(0),1)$select("constant")
 
     # zone_stats_pa <- PA_recl$reduceRegions(collection=gee_comm, reducer=ee$Reducer$frequencyHistogram(),scale=250)
-
-  })
-
-  observeEvent(input$down_pa,{
-    comm_all<-comm_all()
-
-    output$fin_tab<-renderUI(
-      withSpinner(DTOutput("DT_com_fin"))
-    )
-    output$DT_com_fin<-renderDT(a)
-  })
-
-  #cluster analysis of communities
-  comm_clu<-eventReactive(input$down_pa,{
-    req(comm_all)
     print("------start clustering---------")
-    comm_all<-comm_all()
-    comm<-comm()
-    z <- comm_all%>%select(elev_mean,elev_max,elev_min,slope_mean,slope_max,abg_co_tha_mean,abg_co_tha_max,abg_co_tha_min,min_travTime_cent,pop_ha)
+    z <- a%>%select(elev_mean,elev_max,elev_min,slope_mean,slope_max,abg_co_tha_mean,abg_co_tha_max,min_travTime_cent,pop_ha)
+    print("sel done")
     z <- missForest(z)$ximp
+    print("imputation done")
     means <- apply(z,2,mean,na.rm=T)
     sds <- apply(z,2,sd,na.rm=T)
     nor <- scale(z,center=means,scale=sds)
+    print("prep done")
 
     # k means (predefined n clust)
     # library(factoextra)
-    k2 <- kmeans(nor, centers = 3, nstart = 25)
-    comm$clust<-k2$cluster
-    #which community in the clusters are closest to the center?
-    datadistshortset<-dist(nor,method = "euclidean")
+    k3 <- kmeans(nor, centers = 3, nstart = 25)
+    print("clus done")
+    comm$comm_clust<-unlist(k3[1])
 
+    print("assign clust done")
+
+    comm_all<-comm
   })
 
-  ## show the clustered communities
 
   observeEvent(input$down_pa,{
-    req(comm)
-    comm<-comm()
-    output$clus_map<-renderMapview(comm)
+    req(comm_all)
+    comm_all<-comm_all()
+    ## table
+    # output$fin_tab<-renderUI(
+    #   withSpinner(DTOutput("DT_com_fin"))
+    # )
+    # output$DT_com_fin<-renderDT(comm_all)
+    ## map
+    pal <- colorNumeric(c("red", "green", "blue"), domain = comm_all$comm_clust)
+
+    map_fin<-leaflet(comm_all)%>%
+      addProviderTiles(providers$CartoDB.Positron)%>%
+      addPolygons(color = "#444444", weight = 1, smoothFactor = 0.5,
+                  opacity = 1.0, fillOpacity = 0.3,
+                  fillColor = ~pal(comm_all$comm_clust),
+                  highlightOptions = highlightOptions(color = "white", weight = 2,
+                                                      bringToFront = TRUE))
+    output$clus_map<-renderLeaflet(map_fin)
 
   })
 

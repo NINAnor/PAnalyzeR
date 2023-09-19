@@ -31,7 +31,7 @@ app_ui <- function(request) {
       actionButton("confirm2","confirm"),
       uiOutput("com_tab"),
       uiOutput("fin_tab"),
-      mapviewOutput("clus_map")
+      leafletOutput("clus_map")
 
 
     )
